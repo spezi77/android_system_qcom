@@ -1256,6 +1256,57 @@ error:
     return eERR_GET_AUTO_CHAN;
 }
 
+
+/**
+ *    Get the mode of operation.
+ */
+int qsap_get_mode(s32 *pmode)
+{
+    int sock;
+    struct iwreq wrq;
+    s8 interface[MAX_CONF_LINE_LEN];
+    u32 len = MAX_CONF_LINE_LEN;
+    s8 *pif;
+    int ret;
+    sap_auto_channel_info sap_autochan_info;
+    s32 *pchan;
+
+    *pmode = -1;
+    if(NULL == (pif = qsap_get_config_value(pconffile,
+                                 &qsap_str[STR_INTERFACE], interface, &len))) {
+        ALOGD("%s :interface error \n", __func__);
+        goto error;
+    }
+
+    interface[len] = '\0';
+
+    sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if(sock < 0) {
+        ALOGD("%s :socket error \n", __func__);
+        goto error;
+    }
+
+    memset(&wrq, 0, sizeof(wrq));
+    strlcpy(wrq.ifr_name, pif, sizeof(wrq.ifr_name));
+
+    ret = ioctl(sock, SIOCGIWMODE, &wrq);
+    if(ret < 0) {
+        ALOGE("%s: ioctl failure \n",__func__);
+        close(sock);
+        goto error;
+    }
+
+    *pmode = *(s32 *)(&wrq.u.mode);
+    ALOGE("%s: ioctl Get Mode = %d \n",__func__, *pmode);
+    close(sock);
+    return eSUCCESS;
+
+error:
+    *pmode = -1;
+    ALOGE("%s: (Failure) ioctl Get Mode = %d \n",__func__, *pmode);
+    return eERR_UNKNOWN;
+}
+
 /**
  *    Set the channel Range for soft AP.
  */
@@ -2995,11 +3046,11 @@ void qsap_hostd_exec_cmd(s8 *pcmd, s8 *presp, u32 *plen)
 
 /** Command input
     argv[3] = SSID,
-    argv[4] = SEC,
-    argv[5] = 12345,
-    argv[6] = CHANNEL
-    argv[7] = PREAMBLE,
-    argv[8] = MAX_SCB,
+    argv[4] = BROADCAST/HIDDEN,
+    argv[5] = CHANNEL
+    argv[6] = SECURITY,
+    argv[7] = KEY,
+    argv[8] = COMMIT,
 */
 int qsapsetSoftap(int argc, char *argv[])
 {
@@ -3029,21 +3080,42 @@ int qsapsetSoftap(int argc, char *argv[])
         return eERR_UNKNOWN;
     }
 
+    rlen = RECV_BUF_LEN;
+    if (argc > 4) {
+        snprintf(cmdbuf, CMD_BUF_LEN, "set ignore_broadcast_ssid=%d", atoi(argv[4]));
+        (void) qsap_hostd_exec_cmd(cmdbuf, respbuf, &rlen);
+        if(strncmp("success", respbuf, rlen) != 0) {
+            ALOGE("Failed to set ignore_broadcast_ssid \n");
+            return -1;
+        }
+    }
+    /** channel */
+    rlen = RECV_BUF_LEN;
+    if(argc > 5) {
+        snprintf(cmdbuf, CMD_BUF_LEN, "set channel=%d", atoi(argv[5]));
+        (void) qsap_hostd_exec_cmd(cmdbuf, respbuf, &rlen);
+
+        if(strncmp("success", respbuf, rlen) != 0) {
+            ALOGE("Failed to set channel \n");
+            return -1;
+        }
+    }
+
     /** Security */
     rlen = RECV_BUF_LEN;
-    if(argc > 4) {
+    if(argc > 6) {
 
         /**TODO : need to identify the SEC strings for "wep", "wpa", "wpa2" */
-        if(!strcmp(argv[4], "open"))
+        if(!strcmp(argv[6], "open"))
             sec = SEC_MODE_NONE;
 
-        else if(!strcmp(argv[4], "wep"))
+        else if(!strcmp(argv[6], "wep"))
             sec = SEC_MODE_WEP;
 
-        else if(!strcmp(argv[4], "wpa-psk"))
+        else if(!strcmp(argv[6], "wpa-psk"))
             sec = SEC_MODE_WPA_PSK;
 
-        else if(!strcmp(argv[4], "wpa2-psk"))
+        else if(!strcmp(argv[6], "wpa2-psk"))
             sec = SEC_MODE_WPA2_PSK;
 
         snprintf(cmdbuf, CMD_BUF_LEN, "set security_mode=%d",sec);
@@ -3062,10 +3134,10 @@ int qsapsetSoftap(int argc, char *argv[])
     /** Key -- passphrase */
     rlen = RECV_BUF_LEN;
     if ( (sec == SEC_MODE_WPA_PSK) || (sec == SEC_MODE_WPA2_PSK) ) {
-        if(argc > 5) {
+        if(argc > 7) {
             /* If the input passphrase is more than 63 characters, consider first 63 characters only*/
-            if ( strlen(argv[5]) > 63 ) argv[5][63] = '\0';
-            snprintf(cmdbuf, CMD_BUF_LEN, "set wpa_passphrase=%s",argv[5]);
+            if ( strlen(argv[7]) > 63 ) argv[7][63] = '\0';
+            snprintf(cmdbuf, CMD_BUF_LEN, "set wpa_passphrase=%s",argv[7]);
         }
         else {
             snprintf(cmdbuf, CMD_BUF_LEN, "set wpa_passphrase=%s", DEFAULT_PASSPHRASE);
@@ -3076,19 +3148,6 @@ int qsapsetSoftap(int argc, char *argv[])
     if(strncmp("success", respbuf, rlen) != 0) {
         ALOGE("Failed to set passphrase \n");
         return -1;
-    }
-
-    /** channel */
-    rlen = RECV_BUF_LEN;
-    if(argc > 6) {
-        snprintf(cmdbuf, CMD_BUF_LEN, "set channel=%d", atoi(argv[6]));
-        (void) qsap_hostd_exec_cmd(cmdbuf, respbuf, &rlen);
-
-        if(strncmp("success", respbuf, rlen) != 0) {
-            ALOGE("Failed to set channel \n");
-            return -1;
-	}
-
     }
 
     rlen = RECV_BUF_LEN;
